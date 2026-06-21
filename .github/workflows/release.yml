@@ -34,7 +34,8 @@ jobs:
             ca-certificates git \
             g++ make cmake pkg-config \
             libfftw3-dev \
-            libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
+            libavformat-dev libavcodec-dev libavutil-dev libswresample-dev \
+            file fakeroot dpkg-dev
 
       - uses: actions/checkout@v4
 
