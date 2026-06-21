@@ -1,0 +1,76 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux-amd64:
+    name: Build Linux amd64 tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            cmake pkg-config \
+            libfftw3-dev \
+            libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
+
+      - name: Build libkeyfinder
+        run: |
+          git clone --depth 1 --branch v2.2.6 \
+            https://github.com/mixxxdj/libkeyfinder keyfinder
+          cmake -S keyfinder -B keyfinder/build -DBUILD_TESTING=OFF
+          cmake --build keyfinder/build
+          sudo cmake --install keyfinder/build
+          sudo ldconfig
+
+      - name: Build keyfinder-cli
+        run: |
+          cmake -S . -B build
+          cmake --build build
+
+      # Stage `keyfinder_cli` + the bundled libkeyfinder.so so consumers
+      # only need FFmpeg runtime libs (the .so symlinks are flattened to
+      # real files in the tarball so `tar xzf` lands a usable layout).
+      - name: Stage release tarball
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          stage="keyfinder-cli-${version}-linux-amd64"
+          mkdir -p "$stage/bin" "$stage/lib"
+          cp build/keyfinder-cli "$stage/bin/keyfinder_cli"
+          # Resolve the .so symlink chain to the real library, then
+          # recreate the SONAME symlink ldconfig expects.
+          real=$(readlink -f /usr/local/lib/libkeyfinder.so)
+          soname=$(basename "$(readlink /usr/local/lib/libkeyfinder.so)")
+          cp "$real" "$stage/lib/$(basename "$real")"
+          ln -s "$(basename "$real")" "$stage/lib/$soname"
+          ln -s "$soname" "$stage/lib/libkeyfinder.so"
+          cat > "$stage/README.txt" <<EOF
+          keyfinder-cli prebuilt for Linux amd64.
+          Runtime deps: libavformat, libavcodec, libavutil, libswresample,
+          libfftw3 (all standard on Debian/Ubuntu — usually pulled by ffmpeg).
+          Install: copy bin/keyfinder_cli to /usr/local/bin/ and lib/*
+          to /usr/local/lib/, then run \`sudo ldconfig\`.
+          EOF
+          tar czf "$stage.tar.gz" "$stage"
+          sha256sum "$stage.tar.gz" > "$stage.tar.gz.sha256"
+          echo "ASSET=$stage.tar.gz" >> "$GITHUB_ENV"
+          echo "SUMS=$stage.tar.gz.sha256" >> "$GITHUB_ENV"
+
+      - name: Upload to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.SUMS }}
+          generate_release_notes: true
